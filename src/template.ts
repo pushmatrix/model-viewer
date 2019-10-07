@@ -212,7 +212,6 @@ template.innerHTML = `
 
     .slot.controls-prompt svg {
       opacity: 0;
-      transform: scale(0.5);
       transition: opacity 0.3s;
     }
 
