@@ -59,6 +59,8 @@ export const sphericalDefaults = (() => {
   };
 })();
 
+const OFFSET_ROTATION_MULTIPLIER = 5;
+
 const HALF_FIELD_OF_VIEW_RADIANS = (DEFAULT_FOV_DEG / 2) * Math.PI / 180;
 const HALF_PI = Math.PI / 2.0;
 const THIRD_PI = Math.PI / 3.0;
@@ -73,7 +75,9 @@ export const INTERACTION_PROMPT =
     'Use mouse, touch or arrow keys to control the camera!';
 
 export const $controls = Symbol('controls');
+export const $promptElementSVG = Symbol('promptElementSVG');
 export const $promptElement = Symbol('promptElement');
+export const $idealCameraDistance = Symbol('idealCameraDistance');
 const $framedFieldOfView = Symbol('framedFieldOfView');
 
 const $deferInteractionPrompt = Symbol('deferInteractionPrompt');
@@ -86,16 +90,15 @@ const $updateFieldOfView = Symbol('updateFieldOfView');
 const $blurHandler = Symbol('blurHandler');
 const $focusHandler = Symbol('focusHandler');
 const $changeHandler = Symbol('changeHandler');
-const $promptTransitionendHandler = Symbol('promptTransitionendHandler');
 
 const $onBlur = Symbol('onBlur');
 const $onFocus = Symbol('onFocus');
 const $onChange = Symbol('onChange');
-const $onPromptTransitionend = Symbol('onPromptTransitionend');
 
 const $shouldPromptUserToInteract = Symbol('shouldPromptUserToInteract');
 const $waitingToPromptUser = Symbol('waitingToPromptUser');
 const $userPromptedOnce = Symbol('userPromptedOnce');
+const $promptElementVisible = Symbol('promptElementVisible');
 
 const $lastSpherical = Symbol('lastSpherical');
 const $jumpCamera = Symbol('jumpCamera');
@@ -143,7 +146,10 @@ export const ControlsMixin = <T extends Constructor<ModelViewerElementBase>>(
 
     protected[$promptElement] =
         this.shadowRoot!.querySelector('.controls-prompt')!;
+    protected[$promptElementSVG] =
+        this.shadowRoot!.querySelector('.controls-prompt svg')!;
 
+    protected[$promptElementVisible] = false;
     protected[$userPromptedOnce] = false;
     protected[$waitingToPromptUser] = false;
     protected[$shouldPromptUserToInteract] = true;
@@ -160,9 +166,6 @@ export const ControlsMixin = <T extends Constructor<ModelViewerElementBase>>(
 
     protected[$focusHandler] = () => this[$onFocus]();
     protected[$blurHandler] = () => this[$onBlur]();
-
-    protected[$promptTransitionendHandler] = () =>
-        this[$onPromptTransitionend]();
 
     getCameraOrbit(): SphericalPosition {
       const {theta, phi, radius} = this[$lastSpherical];
@@ -187,18 +190,12 @@ export const ControlsMixin = <T extends Constructor<ModelViewerElementBase>>(
       this[$updateCameraOrbit]();
       this[$updateFieldOfView]();
 
-      this[$promptTransitionendHandler]();
-      this[$promptElement].addEventListener(
-          'transitionend', this[$promptTransitionendHandler]);
-
       this[$controls].addEventListener('change', this[$changeHandler]);
     }
 
     disconnectedCallback() {
       super.disconnectedCallback();
 
-      this[$promptElement].removeEventListener(
-          'transitionend', this[$promptTransitionendHandler]);
       this[$controls].removeEventListener('change', this[$changeHandler]);
     }
 
@@ -291,9 +288,28 @@ export const ControlsMixin = <T extends Constructor<ModelViewerElementBase>>(
           // again for this particular <model-element> instance:
           this[$userPromptedOnce] = true;
           this[$waitingToPromptUser] = false;
+          this[$promptElementVisible] = true;
 
           this[$promptElement].classList.add('visible');
         }
+      }
+
+      if (this[$promptElementVisible]) {
+        const {
+          left: modelViewerLeft,
+          width: modelViewerWidth,
+        } = this.getBoundingClientRect();
+        const {
+          left: promptLeft,
+          width: promptWidth,
+        } = this[$promptElementSVG].getBoundingClientRect();
+
+        const modelViewerCenter = modelViewerLeft + (modelViewerWidth / 2);
+        const promptCenter = promptLeft + (promptWidth / 2);
+        const promptOffsetRelative = (promptCenter - modelViewerCenter) / modelViewerWidth;
+
+        (this as any)[$scene].pivot.rotation.y = promptOffsetRelative * OFFSET_ROTATION_MULTIPLIER;
+        this[$needsRender]();
       }
 
       this[$controls].update(time, delta);
@@ -303,6 +319,7 @@ export const ControlsMixin = <T extends Constructor<ModelViewerElementBase>>(
       // Effectively cancel the timer waiting for user interaction:
       this[$waitingToPromptUser] = false;
       this[$promptElement].classList.remove('visible');
+      this[$promptElementVisible] = false;
 
       // Implicitly there was some reason to defer the prompt. If the user
       // has been prompted at least once already, we no longer need to
@@ -387,23 +404,6 @@ export const ControlsMixin = <T extends Constructor<ModelViewerElementBase>>(
       }
     }
 
-    [$onPromptTransitionend]() {
-      const svg = this[$promptElement].querySelector('svg');
-
-      if (svg == null) {
-        return;
-      }
-
-      // NOTE(cdata): We need to make sure that SVG animations are paused
-      // when the prompt is not visible, otherwise we may a significant
-      // compositing cost even while the prompt is at opacity 0.
-      if (this[$promptElement].classList.contains('visible')) {
-        svg.unpauseAnimations();
-      } else {
-        svg.pauseAnimations();
-      }
-    }
-
     [$onResize](event: any) {
       super[$onResize](event);
       this[$updateCamera]();
@@ -443,6 +443,7 @@ export const ControlsMixin = <T extends Constructor<ModelViewerElementBase>>(
     [$onBlur]() {
       this[$waitingToPromptUser] = false;
       this[$promptElement].classList.remove('visible');
+      this[$promptElementVisible] = false;
     }
 
     [$onChange]({source}: ChangeEvent) {
